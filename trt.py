@@ -133,7 +133,7 @@ class YoLov7TRT(object):
         self.batch_size = engine.max_batch_size
 
     def infer(self, image, image_queue):
-        threading.Thread.__init__(self)
+        # threading.Thread.__init__(self)
         # Make self the active context, pushing it on top of the context stack.
         self.ctx.push()
         # Restore
@@ -178,10 +178,12 @@ class YoLov7TRT(object):
         # Here we use the first row of output in that batch_size = 1
         output = host_outputs[0]
 
+        start_post = time.time()
         # Do postprocess
         result_boxes, result_scores, result_classid = self.post_process(
             output[0:6001], batch_origin_h[0], batch_origin_w[0]
         )
+        end_post = time.time()
 
         num_of_objects = len(result_classid)
 
@@ -199,7 +201,7 @@ class YoLov7TRT(object):
         # Put image in queue
         image_queue.put(image_raw)
 
-        return image_raw, end - start, num_of_objects
+        return image_raw, end - start, num_of_objects, end_post - start_post
 
 
     def destroy(self):
@@ -495,8 +497,8 @@ def display_frames(image_queue):
 
             # Calculate time of displaying each image
             display_time = time.time()
-            # image = cv2.resize(image, (416, 416))
-            # cv2.imshow('Video', image)
+            image = cv2.resize(image, (416, 416))
+            cv2.imshow('Video', image)
             print("Video: time-> fps: {:.2f} | display: {:.2f}".format(fps, display_time-prev_display_time))
             prev_display_time = display_time
             if cv2.waitKey(1) & 0xFF == ord('q'):
@@ -571,8 +573,8 @@ def main():
             break
         
         # Perform inference on the frame
-        _, use_time, _ = yolo.infer(frame, image_queue)
-        print("inference: time->{:.2f}ms, fps: {:.2f}, ".format(use_time * 1000, 1 / (use_time)))
+        _, use_time, _,post_time = yolo.infer(frame, image_queue)
+        print("inference: time->{:.2f}ms, fps: {:.2f}, postprocessing time: {}ms ".format(use_time * 1000, 1 / (use_time), post_time * 1000))
 
     # Set the flag to stop the video processing
     stop_processing = True
