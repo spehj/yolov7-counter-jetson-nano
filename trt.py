@@ -388,7 +388,7 @@ class YoLov7TRT(object):
         return boxes
 
 
-class inferThread(threading.Thread):
+class InferThread(threading.Thread):
     def __init__(self, yolov7_wrapper):
         threading.Thread.__init__(self)
         self.yolov7_wrapper = yolov7_wrapper
@@ -455,17 +455,17 @@ class inferThread(threading.Thread):
                 2,
                 cv2.LINE_AA,
             )
-            cv2.imshow("Recognition result", result)
+            # TODO:
+            # Send image to another thread where images will be displayed so this thread is not blocked. Ignore next line
+            # cv2.imshow("Recognition result", result) 
+            
+            
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
 
 
 if __name__ == "__main__":
     # load custom plugin and engine
-    # Version with input image of 416x416 pixels
-    # PLUGIN_LIBRARY = "../plugins/libmyplugins-416.so"
-    # engine_file_path = "../engines/yolov7-tiny-416.engine"
-
     # Version with input image of 416x416 pixels
     PLUGIN_LIBRARY = "libmyplugins.so"
     engine_file_path = "yolov7-tiny-rep-best.engine"
@@ -492,8 +492,10 @@ if __name__ == "__main__":
     try:
         print("batch size is", yolov7_wrapper.batch_size)
 
-        # create a new thread to do inference
-        thread1 = inferThread(yolov7_wrapper)
+        # Create a new thread to do inference
+        thread1 = InferThread(yolov7_wrapper)
+        # Create a new thread to display results in real time
+
         thread1.start()
         thread1.join()
 
