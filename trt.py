@@ -18,6 +18,8 @@ import threading
 
 CONF_THRESH = 0.5 # was 0.5
 IOU_THRESHOLD = 0.45
+stop_processing = False
+
     
 def get_img_path_batches(batch_size, img_dir):
     ret = []
@@ -75,16 +77,23 @@ class YoLov7TRT(object):
     description: A YOLOv7 class that warps TensorRT ops, preprocess and postprocess ops.
     """
 
-    def __init__(self, engine_file_path, image_queue):
+    def __init__(self, engine_file_path):
         # Create a Context on this device,
         self.ctx = cuda.Device(0).make_context()
         stream = cuda.Stream()
         TRT_LOGGER = trt.Logger(trt.Logger.INFO)
         runtime = trt.Runtime(TRT_LOGGER)
+        self.categories = [
+            "pig",
+            "person",
+        ]
+        print("Engine: ", engine_file_path)
+        
 
         # Deserialize the engine from file
         with open(engine_file_path, "rb") as f:
             engine = runtime.deserialize_cuda_engine(f.read())
+            print(engine)
         context = engine.create_execution_context()
 
         host_inputs = []
@@ -123,7 +132,7 @@ class YoLov7TRT(object):
         self.bindings = bindings
         self.batch_size = engine.max_batch_size
 
-    def infer(self, image):
+    def infer(self, image, image_queue):
         threading.Thread.__init__(self)
         # Make self the active context, pushing it on top of the context stack.
         self.ctx.push()
@@ -184,7 +193,7 @@ class YoLov7TRT(object):
                 image_raw,
                 color=(50, 255, 50),
                 label="{}:{:.2f}".format(
-                    categories[int(result_classid[j])], result_scores[j]
+                    self.categories[int(result_classid[j])], result_scores[j]
                 ),
             )
         # Put image in queue
@@ -418,11 +427,12 @@ class InferThread(threading.Thread):
 
             img = cv2.resize(frame, (416, 416))
 
-            new_frame_time = time.time()
+            
             result, use_time, number_of_objects = self.yolov7_wrapper.infer(img)
 
             total_number_of_objects += number_of_objects
             # Calculate FPS of complete processing time of one frame (not just inference)
+            new_frame_time = time.time()
             fps = int(1 / (new_frame_time - prev_frame_time))
             prev_frame_time = new_frame_time
             # TODO
@@ -469,58 +479,112 @@ class InferThread(threading.Thread):
                 break
 
 
-def display_video():
+def display_frames(image_queue):
+    prev_frame_time = 0
+    prev_display_time = 0
     while True:
-        # Get the image from the queue
-        image = image_queue.get()
+        
+        if stop_processing:
+            break
+        if not image_queue.empty():
+            # Calculate fps between getting new frames
+            new_frame_time = time.time()
+            fps = int(1 / (new_frame_time - prev_frame_time))
+            prev_frame_time = new_frame_time            
+            image = image_queue.get()
 
-        # Display the image using your desired method (e.g., cv2.imshow)
-        cv2.imshow("Inference Output", image)
-        cv2.waitKey(1)  # Adjust the delay as needed
+            # Calculate time of displaying each image
+            display_time = time.time()
+            # image = cv2.resize(image, (416, 416))
+            # cv2.imshow('Video', image)
+            print("Video: time-> fps: {:.2f} | display: {:.2f}".format(fps, display_time-prev_display_time))
+            prev_display_time = display_time
+            if cv2.waitKey(1) & 0xFF == ord('q'):
+                break
 
-        # Mark the task as done in the queue
-        image_queue.task_done()
+    cv2.destroyAllWindows()
 
-if __name__ == "__main__":
-    # load custom plugin and engine
-    # Version with input image of 416x416 pixels
-    PLUGIN_LIBRARY = "libmyplugins.so"
-    engine_file_path = "yolov7-tiny-rep-best.engine"
+# if __name__ == "__main__":
+#     # load custom plugin and engine
+#     # Version with input image of 416x416 pixels
+#     PLUGIN_LIBRARY = "libmyplugins.so"
+#     engine_file_path = "yolov7-tiny-rep-best.engine"
 
-    if len(sys.argv) > 1:
-        engine_file_path = sys.argv[1]
-    if len(sys.argv) > 2:
-        PLUGIN_LIBRARY = sys.argv[2]
+#     if len(sys.argv) > 1:
+#         engine_file_path = sys.argv[1]
+#     if len(sys.argv) > 2:
+#         PLUGIN_LIBRARY = sys.argv[2]
 
-    ctypes.CDLL(PLUGIN_LIBRARY)
+#     ctypes.CDLL(PLUGIN_LIBRARY)
 
-    # load coco labels
+#     # load coco labels
 
-    categories = [
-        "pig",
-        "person",
-    ]
+#     categories = [
+#         "pig",
+#         "person",
+#     ]
 
-    if os.path.exists("output/"):
-        shutil.rmtree("output/")
-    os.makedirs("output/")
-    image_queue = Queue()
-    # a YoLov7TRT instance
-    yolov7_wrapper = YoLov7TRT(engine_file_path, image_queue)
-    display_thread = threading.Thread(target=display_video, args=([],))
-    display_thread.start()
+#     if os.path.exists("output/"):
+#         shutil.rmtree("output/")
+#     os.makedirs("output/")
+#     image_queue = Queue()
+#     # a YoLov7TRT instance
+#     yolov7_wrapper = YoLov7TRT(engine_file_path, image_queue)
+#     display_thread = threading.Thread(target=display_video, args=([],))
+#     display_thread.start()
 
-    print("batch size is", yolov7_wrapper.batch_size)
+#     print("batch size is", yolov7_wrapper.batch_size)
     
 
-    # Create a new thread to do inference
-    thread1 = InferThread(yolov7_wrapper)
-    # Create a new thread to display results in real time
+#     # Create a new thread to do inference
+#     thread1 = InferThread(yolov7_wrapper)
+#     # Create a new thread to display results in real time
 
-    thread1.start()
-    thread1.join()
+#     thread1.start()
+#     thread1.join()
+#     display_thread.join()
+
+
+#     # destroy the instance
+#     yolov7_wrapper.destroy()
+
+def main():
+    PLUGIN_LIBRARY = "libmyplugins.so"
+    engine_file_path = "yolov7-tiny-rep-best.engine"
+    video_path = "output1.mp4"
+
+    ctypes.CDLL(PLUGIN_LIBRARY)
+    image_queue = Queue()
+
+    # Create an instance of YoLov7TRT
+    yolo = YoLov7TRT(engine_file_path)
+
+    # Create a thread for displaying the frames
+    display_thread = threading.Thread(target=display_frames, args=(image_queue,))
+    display_thread.start()
+
+    # Read video frames
+    video_capture = cv2.VideoCapture(video_path)
+    while True:
+        ret, frame = video_capture.read()
+        if not ret:
+            break
+        
+        # Perform inference on the frame
+        _, use_time, _ = yolo.infer(frame, image_queue)
+        print("inference: time->{:.2f}ms, fps: {:.2f}, ".format(use_time * 1000, 1 / (use_time)))
+
+    # Set the flag to stop the video processing
+    stop_processing = True
+
+    # Wait for the display thread to finish
     display_thread.join()
 
+    # Release the video capture
+    video_capture.release()
 
-    # destroy the instance
-    yolov7_wrapper.destroy()
+    # Destroy the YOLO instance
+    yolo.destroy()
+
+if __name__ == '__main__':
+    main()
