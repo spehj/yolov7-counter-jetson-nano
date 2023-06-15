@@ -13,6 +13,8 @@ import numpy as np
 import pycuda.autoinit
 import pycuda.driver as cuda
 import tensorrt as trt
+from queue import Queue
+import threading
 
 CONF_THRESH = 0.5 # was 0.5
 IOU_THRESHOLD = 0.45
@@ -73,7 +75,7 @@ class YoLov7TRT(object):
     description: A YOLOv7 class that warps TensorRT ops, preprocess and postprocess ops.
     """
 
-    def __init__(self, engine_file_path):
+    def __init__(self, engine_file_path, image_queue):
         # Create a Context on this device,
         self.ctx = cuda.Device(0).make_context()
         stream = cuda.Stream()
@@ -185,6 +187,9 @@ class YoLov7TRT(object):
                     categories[int(result_classid[j])], result_scores[j]
                 ),
             )
+        # Put image in queue
+        image_queue.put(image_raw)
+
         return image_raw, end - start, num_of_objects
 
 
@@ -464,6 +469,18 @@ class InferThread(threading.Thread):
                 break
 
 
+def display_video():
+    while True:
+        # Get the image from the queue
+        image = image_queue.get()
+
+        # Display the image using your desired method (e.g., cv2.imshow)
+        cv2.imshow("Inference Output", image)
+        cv2.waitKey(1)  # Adjust the delay as needed
+
+        # Mark the task as done in the queue
+        image_queue.task_done()
+
 if __name__ == "__main__":
     # load custom plugin and engine
     # Version with input image of 416x416 pixels
@@ -487,18 +504,23 @@ if __name__ == "__main__":
     if os.path.exists("output/"):
         shutil.rmtree("output/")
     os.makedirs("output/")
+    image_queue = Queue()
     # a YoLov7TRT instance
-    yolov7_wrapper = YoLov7TRT(engine_file_path)
-    try:
-        print("batch size is", yolov7_wrapper.batch_size)
+    yolov7_wrapper = YoLov7TRT(engine_file_path, image_queue)
+    display_thread = threading.Thread(target=display_video, args=([],))
+    display_thread.start()
 
-        # Create a new thread to do inference
-        thread1 = InferThread(yolov7_wrapper)
-        # Create a new thread to display results in real time
+    print("batch size is", yolov7_wrapper.batch_size)
+    
 
-        thread1.start()
-        thread1.join()
+    # Create a new thread to do inference
+    thread1 = InferThread(yolov7_wrapper)
+    # Create a new thread to display results in real time
 
-    finally:
-        # destroy the instance
-        yolov7_wrapper.destroy()
+    thread1.start()
+    thread1.join()
+    display_thread.join()
+
+
+    # destroy the instance
+    yolov7_wrapper.destroy()
