@@ -189,6 +189,7 @@ class YoLov7TRT(object):
                     categories[int(result_classid[j])], result_scores[j]
                 ),
             )
+        
         return image_raw, end - start, num_of_objects, end_pre-start_pre, end_post-start_post
 
 
@@ -211,108 +212,57 @@ class YoLov7TRT(object):
             yield np.zeros([self.input_h, self.input_w, 3], dtype=np.uint8)
     
     def preprocess_image(self, raw_bgr_image):
-      """
-      description: Convert BGR image to RGB,
-                  resize and pad it to target size, normalize to [0,1],
-                  transform to NCHW format.
-      param:
-          input_image_path: str, image path
-      return:
-          image:  the processed image
-          image_raw: the original image
-          h: original height
-          w: original width
-      """
-      image_raw = raw_bgr_image
-      h, w, c = image_raw.shape
-
-      # Calculate width and height and paddings
-      r_w = self.input_w / w
-      r_h = self.input_h / h
-
-      if r_h > r_w:
-          tw = self.input_w
-          th = int(r_w * h)
-          tx1 = tx2 = 0
-          ty1 = int((self.input_h - th) / 2)
-          ty2 = self.input_h - th - ty1
-      else:
-          tw = int(r_h * w)
-          th = self.input_h
-          tx1 = int((self.input_w - tw) / 2)
-          tx2 = self.input_w - tw - tx1
-          ty1 = ty2 = 0
-
-      # Resize the image with long side while maintaining ratio
-      image = cv2.resize(image_raw, (tw, th))
-
-      # Pad the short side with (128,128,128) using NumPy operations
-      pad_values = ((ty1, ty2), (tx1, tx2), (0, 0))
-      image = np.pad(image, pad_values, constant_values=128)
-
-      image = image.astype(np.float32)
-
-      # Normalize to [0,1]
-      image /= 255.0
-
-      # HWC to CHW format:
-      image = np.transpose(image, [2, 0, 1])
-
-      # CHW to NCHW format
-      image = np.expand_dims(image, axis=0)
-
-      # Convert the image to row-major order, also known as "C order":
-      image = np.ascontiguousarray(image)
-
-      return image, image_raw, h, w
-
-    # def preprocess_image(self, raw_bgr_image):
-    #     """
-    #     description: Convert BGR image to RGB,
-    #                  resize and pad it to target size, normalize to [0,1],
-    #                  transform to NCHW format.
-    #     param:
-    #         input_image_path: str, image path
-    #     return:
-    #         image:  the processed image
-    #         image_raw: the original image
-    #         h: original height
-    #         w: original width
-    #     """
-    #     image_raw = raw_bgr_image
-    #     h, w, c = image_raw.shape
-    #     image = cv2.cvtColor(image_raw, cv2.COLOR_BGR2RGB)
-    #     # Calculate widht and height and paddings
-    #     r_w = self.input_w / w
-    #     r_h = self.input_h / h
-    #     if r_h > r_w:
-    #         tw = self.input_w
-    #         th = int(r_w * h)
-    #         tx1 = tx2 = 0
-    #         ty1 = int((self.input_h - th) / 2)
-    #         ty2 = self.input_h - th - ty1
-    #     else:
-    #         tw = int(r_h * w)
-    #         th = self.input_h
-    #         tx1 = int((self.input_w - tw) / 2)
-    #         tx2 = self.input_w - tw - tx1
-    #         ty1 = ty2 = 0
-    #     # Resize the image with long side while maintaining ratio
-    #     image = cv2.resize(image, (tw, th))
-    #     # Pad the short side with (128,128,128)
-    #     image = cv2.copyMakeBorder(
-    #         image, ty1, ty2, tx1, tx2, cv2.BORDER_CONSTANT, None, (128, 128, 128)
-    #     )
-    #     image = image.astype(np.float32)
-    #     # Normalize to [0,1]
-    #     image /= 255.0
-    #     # HWC to CHW format:
-    #     image = np.transpose(image, [2, 0, 1])
-    #     # CHW to NCHW format
-    #     image = np.expand_dims(image, axis=0)
-    #     # Convert the image to row-major order, also known as "C order":
-    #     image = np.ascontiguousarray(image)
-    #     return image, image_raw, h, w
+        """
+        description: Convert BGR image to RGB,
+                    resize and pad it to target size, normalize to [0,1],
+                    transform to NCHW format.
+        param:
+            raw_bgr_image: numpy.ndarray, BGR image
+        return:
+            image:  the processed image
+            image_raw: the original image
+            h: original height
+            w: original width
+        """
+        image_raw = raw_bgr_image
+        h, w, c = image_raw.shape
+        image = cv2.cvtColor(image_raw, cv2.COLOR_BGR2RGB)
+        
+        # Calculate widht and height and paddings
+        r_w = self.input_w / w
+        r_h = self.input_h / h
+        
+        if r_h > r_w:
+            tw = self.input_w
+            th = int(r_w * h)
+            tx1 = tx2 = 0
+            ty1 = int((self.input_h - th) / 2)
+            ty2 = self.input_h - th - ty1
+        else:
+            tw = int(r_h * w)
+            th = self.input_h
+            tx1 = int((self.input_w - tw) / 2)
+            tx2 = self.input_w - tw - tx1
+            ty1 = ty2 = 0
+        
+        # Resize the image with long side while maintaining ratio
+        image = cv2.resize(image, (tw, th))
+        
+        # Pad the short side with (128,128,128)
+        image = cv2.copyMakeBorder(
+            image, ty1, ty2, tx1, tx2, cv2.BORDER_CONSTANT, None, (128, 128, 128)
+        )
+        
+        # Normalize to [0,1]
+        image = image.astype(np.float32) / 255.0
+        
+        # HWC to CHW format:
+        image = np.transpose(image, [2, 0, 1])
+        
+        # CHW to NCHW format
+        image = np.expand_dims(image, axis=0)
+        
+        return image, image_raw, h, w
 
     def xywh2xyxy(self, origin_h, origin_w, x):
         """
@@ -484,19 +434,23 @@ class inferThread(threading.Thread):
         prev_frame_time = time.time()
         new_frame_time = 0
         while True:
+            start_read = time.time()
+            ret, frame = self.cap.read()
+            end_read = time.time()
+
             new_frame_time = time.time()
             # Calculate FPS of complete processing time of one frame (not just inference)
             fps_total = float(1 / (new_frame_time - prev_frame_time))
             time_total = new_frame_time - prev_frame_time
             prev_frame_time = new_frame_time
-            start_read = time.time()
-            ret, frame = self.cap.read()
-            end_read = time.time()
+            
+            
             if not ret:
                 break
             
             
-            img = self.image_resize(frame, width=416)
+            # img = self.image_resize(frame, width=416)
+            img=frame
             start_infer = time.time()
             result, use_time, number_of_objects, time_pre, time_post = self.yolov7_wrapper.infer(img)
             end_infer = time.time()
@@ -511,40 +465,20 @@ class inferThread(threading.Thread):
             font = cv2.FONT_HERSHEY_DUPLEX
 
             start_disp = time.time()
-            # cv2.putText(
-            #     result,
-            #     yolo_model_name,
-            #     (10, 50),
-            #     font,
-            #     1,
-            #     (245, 20, 20),
-            #     2,
-            #     cv2.LINE_AA,
-            # )
-            # cv2.putText(
-            #     result,
-            #     fps_str,
-            #     (640 - 200, 50),
-            #     font,
-            #     1,
-            #     (20, 20, 245),
-            #     2,
-            #     cv2.LINE_AA,
-            # )
             cv2.imshow("Recognition result", result)
             end_disp = time.time()
 
 
             print(
-                "inference: time->{:.2f}ms, time total: {:.2f}ms, objects: {}, time pre: {:.2f}ms, time post: {:.2f}ms, total infer: {:.2f}ms, disp: {:.2f}, read: {:.2f}".format(
-                    use_time * 1000, time_total*1000, number_of_objects, time_pre*1000, time_post*1000, (end_infer-start_infer)*1000, (end_disp-start_disp)*1000, (end_read-start_read)*1000
+                "time total: {:.2f}ms, total infer: {:.2f}ms, time inference: {:.2f}ms, time pre: {:.2f}ms, time post: {:.2f}ms, diff: {:.2f}ms,  read: {:.2f}ms".format(
+                    time_total*1000, (end_infer-start_infer)*1000, use_time * 1000, time_pre*1000, time_post*1000, ((end_infer-start_infer)-use_time-time_pre-time_post)*1000 , (end_read-start_read)*1000
                 )
             )
-            print(
-                "total fps: {:.2f}, preprocessing fps: {:.2f}ms, postprocessing fps: {:.2f}ms, total infer fps: {:.2f}, inference fps: {:.2f},  displaying fps: {:.2f}, reading fps: {:.2f}".format(
-                    fps_total, 1/time_pre, 1/time_post, 1/(end_infer-start_infer), 1 / (use_time),  1/(end_disp-start_disp), 1/(end_read-start_read)
-                )
-            )
+            # print(
+            #     "total fps: {:.2f}, total infer fps: {:.2f}, inference fps: {:.2f},   preprocessing fps: {:.2f}ms, postprocessing fps: {:.2f}, reading fps: {:.2f}".format(
+            #         fps_total, 1/(end_infer-start_infer), 1 / (use_time) ,1/time_pre, 1/time_post, 1/(end_read-start_read)
+            #     )
+            # )
             if cv2.waitKey(1) & 0xFF == ord("q"):
                 break
     
