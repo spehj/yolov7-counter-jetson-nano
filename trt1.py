@@ -121,60 +121,118 @@ class YoLov7TRT(object):
         self.bindings = bindings
         self.batch_size = engine.max_batch_size
 
+    # def infer(self, image):
+    #     threading.Thread.__init__(self)
+    #     # Make self the active context, pushing it on top of the context stack.
+    #     start = time.time()
+    #     self.ctx.push()
+    #     # Restore
+    #     stream = self.stream
+    #     context = self.context
+    #     engine = self.engine
+    #     host_inputs = self.host_inputs
+    #     cuda_inputs = self.cuda_inputs
+    #     host_outputs = self.host_outputs
+    #     cuda_outputs = self.cuda_outputs
+    #     bindings = self.bindings
+    #     # Do image preprocess
+    #     batch_image_raw = []
+    #     batch_origin_h = []
+    #     batch_origin_w = []
+    #     batch_input_image = np.empty(shape=[1, 3, self.input_h, self.input_w])
+
+    #     start_pre = time.time()
+    #     input_image, image_raw, origin_h, origin_w = self.preprocess_image(image)
+    #     end_pre = time.time()
+    #     batch_image_raw.append(image_raw)
+    #     batch_origin_h.append(origin_h)
+    #     batch_origin_w.append(origin_w)
+    #     np.copyto(batch_input_image, input_image)
+    #     batch_input_image = np.ascontiguousarray(batch_input_image)
+
+    #     # Copy input image to host buffer
+    #     np.copyto(host_inputs[0], batch_input_image.ravel())
+        
+    #     # Transfer input data  to the GPU.
+    #     cuda.memcpy_htod_async(cuda_inputs[0], host_inputs[0], stream)
+    #     # Run inference.
+    #     context.execute_async(
+    #         batch_size=self.batch_size, bindings=bindings, stream_handle=stream.handle
+    #     )
+    #     # Transfer predictions back from the GPU.
+    #     cuda.memcpy_dtoh_async(host_outputs[0], cuda_outputs[0], stream)
+    #     # Synchronize the stream
+    #     stream.synchronize()
+    #     end = time.time()
+
+    #     # Remove any context from the top of the context stack, deactivating it.
+    #     self.ctx.pop()
+    #     # Here we use the first row of output in that batch_size = 1
+    #     output = host_outputs[0]
+
+    #     start_post = time.time()
+    #     # Do postprocess
+    #     result_boxes, result_scores, result_classid = self.post_process(
+    #         output[0:6001], batch_origin_h[0], batch_origin_w[0]
+    #     )
+    #     end_post = time.time()
+
+    #     num_of_objects = len(result_classid)
+
+    #     # Draw rectangles and labels on the original image
+    #     for j in range(len(result_boxes)):
+    #         box = result_boxes[j]
+    #         plot_one_box(
+    #             box,
+    #             image_raw,
+    #             color=(50, 255, 50),
+    #             label="{}:{:.2f}".format(
+    #                 categories[int(result_classid[j])], result_scores[j]
+    #             ),
+    #         )
+        
+    #     return image_raw, end - start, num_of_objects, end_pre-start_pre, end_post-start_post
+
     def infer(self, image):
-        threading.Thread.__init__(self)
         # Make self the active context, pushing it on top of the context stack.
         self.ctx.push()
-        # Restore
-        stream = self.stream
-        context = self.context
-        engine = self.engine
-        host_inputs = self.host_inputs
-        cuda_inputs = self.cuda_inputs
-        host_outputs = self.host_outputs
-        cuda_outputs = self.cuda_outputs
-        bindings = self.bindings
-        # Do image preprocess
-        batch_image_raw = []
-        batch_origin_h = []
-        batch_origin_w = []
-        batch_input_image = np.empty(shape=[1, 3, self.input_h, self.input_w])
 
+        # Do image preprocess
         start_pre = time.time()
         input_image, image_raw, origin_h, origin_w = self.preprocess_image(image)
         end_pre = time.time()
-        batch_image_raw.append(image_raw)
-        batch_origin_h.append(origin_h)
-        batch_origin_w.append(origin_w)
-        np.copyto(batch_input_image, input_image)
-        batch_input_image = np.ascontiguousarray(batch_input_image)
-
-        # Copy input image to host buffer
-        np.copyto(host_inputs[0], batch_input_image.ravel())
         start = time.time()
-        # Transfer input data  to the GPU.
-        cuda.memcpy_htod_async(cuda_inputs[0], host_inputs[0], stream)
+        # Copy input image to host buffer
+        np.copyto(self.host_inputs[0], input_image.ravel())
+        
+        # Transfer input data to the GPU.
+        cuda.memcpy_htod_async(self.cuda_inputs[0], self.host_inputs[0])
+
         # Run inference.
-        context.execute_async(
-            batch_size=self.batch_size, bindings=bindings, stream_handle=stream.handle
+        self.context.execute_async(
+            batch_size=self.batch_size, bindings=self.bindings, stream_handle=self.stream.handle
         )
+
         # Transfer predictions back from the GPU.
-        cuda.memcpy_dtoh_async(host_outputs[0], cuda_outputs[0], stream)
+        cuda.memcpy_dtoh_async(self.host_outputs[0], self.cuda_outputs[0])
+
         # Synchronize the stream
-        stream.synchronize()
-        end = time.time()
+        self.stream.synchronize()
+        
 
         # Remove any context from the top of the context stack, deactivating it.
         self.ctx.pop()
+
         # Here we use the first row of output in that batch_size = 1
-        output = host_outputs[0]
+        output = self.host_outputs[0]
+        end = time.time()
 
         start_post = time.time()
         # Do postprocess
         result_boxes, result_scores, result_classid = self.post_process(
-            output[0:6001], batch_origin_h[0], batch_origin_w[0]
+            output[0:6001], origin_h, origin_w
         )
-        end_post = time.time()
+        
 
         num_of_objects = len(result_classid)
 
@@ -189,8 +247,10 @@ class YoLov7TRT(object):
                     categories[int(result_classid[j])], result_scores[j]
                 ),
             )
-        
-        return image_raw, end - start, num_of_objects, end_pre-start_pre, end_post-start_post
+        end_post = time.time()
+
+        return image_raw, end - start, num_of_objects, end_pre - start_pre, end_post - start_post
+
 
 
     def destroy(self):
