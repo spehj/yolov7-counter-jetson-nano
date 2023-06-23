@@ -243,7 +243,7 @@ class SortTracker(object):
             d = trk.get_state()[0]
             x1, y1, x2, y2 = d[0], d[1], d[2], d[3]
             if (trk.time_since_update < 1) and (trk.hit_streak >= self.min_hits or self.frame_count <= self.min_hits):
-                # breakpoint()
+                # breakpoint() # [x1,y1,x2,y2 track_id, class_id, conf]
                 ret.append(np.concatenate((d, [trk.id + 1], [trk.cls], [trk.conf])).reshape(1, -1))
             i -= 1
             # remove dead tracklet
