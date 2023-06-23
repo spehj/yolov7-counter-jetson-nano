@@ -1,3 +1,5 @@
+from sort1 import SortTracker
+
 """
 An example that uses TensorRT's Python api to make inferences.
 """
@@ -68,6 +70,52 @@ def plot_one_box(x, img, color=None, label=None, line_thickness=None):
         )
 
 
+def convert_to_detections(array):
+    num_boxes = int(array[0])
+    # print("BOXES: ", num_boxes)
+    detections = np.empty((num_boxes, 6))  # Initialize an empty array with 6 columns
+
+    for i in range(num_boxes):
+        start_idx = i * 6  # Each box has 6 values: cx, cy, w, h, conf, cls_id
+        cx, cy, w, h, conf, cls_id = array[start_idx:start_idx + 6]
+        x1 = cx - w / 2
+        y1 = cy - h / 2
+        x2 = cx + w / 2
+        y2 = cy + h / 2
+        score = conf
+        # object_id = i + 1  # Object ID starts from 1
+
+        detection = [x1, y1, x2, y2, score, cls_id]
+        detections[i] = detection
+
+    return detections
+
+def convert_from_detections(detections, num):
+    num_boxes = detections.shape[0]
+    array = np.empty((num_boxes, 6))  # Initialize an empty array with 6 columns
+
+    for i in range(num_boxes):
+        detection = detections[i]
+        x1, y1, x2, y2, score, cls_id, track_id = detection
+
+        cx = (x1 + x2) / 2
+        cy = (y1 + y2) / 2
+        w = x2 - x1
+        h = y2 - y1
+        conf = score
+
+        start_idx = i * 6
+        array[start_idx:start_idx + 6] = [cx, cy, w, h, conf, cls_id]
+
+    # Add zeros to the end of the array
+    zeros_to_add = 1201 - len(array.flatten())
+    array = np.concatenate((array.flatten(), np.zeros(zeros_to_add)))
+
+    array[0] = num
+
+    return array
+
+
 class YoLov7TRT(object):
     """
     description: A YOLOv7 class that warps TensorRT ops, preprocess and postprocess ops.
@@ -121,79 +169,7 @@ class YoLov7TRT(object):
         self.bindings = bindings
         self.batch_size = engine.max_batch_size
 
-    # def infer(self, image):
-    #     threading.Thread.__init__(self)
-    #     # Make self the active context, pushing it on top of the context stack.
-    #     start = time.time()
-    #     self.ctx.push()
-    #     # Restore
-    #     stream = self.stream
-    #     context = self.context
-    #     engine = self.engine
-    #     host_inputs = self.host_inputs
-    #     cuda_inputs = self.cuda_inputs
-    #     host_outputs = self.host_outputs
-    #     cuda_outputs = self.cuda_outputs
-    #     bindings = self.bindings
-    #     # Do image preprocess
-    #     batch_image_raw = []
-    #     batch_origin_h = []
-    #     batch_origin_w = []
-    #     batch_input_image = np.empty(shape=[1, 3, self.input_h, self.input_w])
-
-    #     start_pre = time.time()
-    #     input_image, image_raw, origin_h, origin_w = self.preprocess_image(image)
-    #     end_pre = time.time()
-    #     batch_image_raw.append(image_raw)
-    #     batch_origin_h.append(origin_h)
-    #     batch_origin_w.append(origin_w)
-    #     np.copyto(batch_input_image, input_image)
-    #     batch_input_image = np.ascontiguousarray(batch_input_image)
-
-    #     # Copy input image to host buffer
-    #     np.copyto(host_inputs[0], batch_input_image.ravel())
-        
-    #     # Transfer input data  to the GPU.
-    #     cuda.memcpy_htod_async(cuda_inputs[0], host_inputs[0], stream)
-    #     # Run inference.
-    #     context.execute_async(
-    #         batch_size=self.batch_size, bindings=bindings, stream_handle=stream.handle
-    #     )
-    #     # Transfer predictions back from the GPU.
-    #     cuda.memcpy_dtoh_async(host_outputs[0], cuda_outputs[0], stream)
-    #     # Synchronize the stream
-    #     stream.synchronize()
-    #     end = time.time()
-
-    #     # Remove any context from the top of the context stack, deactivating it.
-    #     self.ctx.pop()
-    #     # Here we use the first row of output in that batch_size = 1
-    #     output = host_outputs[0]
-
-    #     start_post = time.time()
-    #     # Do postprocess
-    #     result_boxes, result_scores, result_classid = self.post_process(
-    #         output[0:6001], batch_origin_h[0], batch_origin_w[0]
-    #     )
-    #     end_post = time.time()
-
-    #     num_of_objects = len(result_classid)
-
-    #     # Draw rectangles and labels on the original image
-    #     for j in range(len(result_boxes)):
-    #         box = result_boxes[j]
-    #         plot_one_box(
-    #             box,
-    #             image_raw,
-    #             color=(50, 255, 50),
-    #             label="{}:{:.2f}".format(
-    #                 categories[int(result_classid[j])], result_scores[j]
-    #             ),
-    #         )
-        
-    #     return image_raw, end - start, num_of_objects, end_pre-start_pre, end_post-start_post
-
-    def infer(self, image):
+    def infer(self, image, tracker):
         # Make self the active context, pushing it on top of the context stack.
         self.ctx.push()
 
@@ -223,18 +199,54 @@ class YoLov7TRT(object):
         # Remove any context from the top of the context stack, deactivating it.
         self.ctx.pop()
 
+        ############################################
+        ############################################
+        ############################################
+        ############################################
+        ################TODO########################
+        ############################################
+        ############################################
+        ############################################
+        ############################################
+        ############################################
+
         # Here we use the first row of output in that batch_size = 1
         output = self.host_outputs[0]
+        #print(output[:20])
+        #print(len(output))
+        
+        # dets = convert_to_detections(output)
+        # # Get the num of boxes detected
+        num = output[0]
+        # # Reshape to a two dimentional ndarray
+        # pred = np.reshape(output[1:], (-1, 6))[:num, :]
+        # print(pred)
+        # print(50*"*")
+        # online_targets = tracker.update(dets)
+        
+        # if num != 0.0 and len(online_targets)>0:
+        #     # print("NUM: ", num)
+        #     # print("OUTPUT: ", output[:100])
+        #     # print("TRACKING: ", online_targets)    
+        #     detections = convert_from_detections(online_targets, num)
+        # else:
+        #     detections = output
+        detections = output  
+        # print(online_targets)
+        # print(50*"*")
+        # print("OUTPUT: {}\nLEN: {}\nOUT 6002: {}\nLENOUT: {}".format(output, len(output), output[0:6001], len(output[0:6001])))
         end = time.time()
 
         start_post = time.time()
+        
         # Do postprocess
         result_boxes, result_scores, result_classid = self.post_process(
-            output[0:6001], origin_h, origin_w
+            detections, origin_h, origin_w
         )
         
 
         num_of_objects = len(result_classid)
+        print("Objects: ", num_of_objects)
 
         # Draw rectangles and labels on the original image
         for j in range(len(result_boxes)):
@@ -352,6 +364,28 @@ class YoLov7TRT(object):
 
         return y
 
+    # def post_process(self, output, origin_h, origin_w):
+    #   """
+    #   Description: Postprocesses the prediction
+    #   Params:
+    #       output:     A numpy array in the format [[x1, y1, x2, y2, score, cls_id, track_id], [x1, y1, x2, y2, score, cls_id, track_id], ...]
+    #       origin_h:   Height of the original image
+    #       origin_w:   Width of the original image
+    #   Returns:
+    #       result_boxes:   Final boxes, a numpy array where each row represents a box [x1, y1, x2, y2]
+    #       result_scores:  Final scores, a numpy array where each element is the score corresponding to a box
+    #       result_classid: Final class IDs, a numpy array where each element is the class ID corresponding to a box
+    #   """
+    #   num_boxes = output.shape[0]
+    #   if num_boxes == 0:
+    #       return np.empty((0, 4)), np.array([]), np.array([])
+
+    #   result_boxes = output[:, :4]
+    #   result_scores = output[:, 4]
+    #   result_classid = output[:, 5]
+
+    #   return result_boxes, result_scores, result_classid
+
     def post_process(self, output, origin_h, origin_w):
         """
         description: postprocess the prediction
@@ -368,6 +402,9 @@ class YoLov7TRT(object):
         num = int(output[0])
         # Reshape to a two dimentional ndarray
         pred = np.reshape(output[1:], (-1, 6))[:num, :]
+        print(output[:56])
+        print("LEN: ", len(output))
+        print(50*"*")
         # Do nms
         boxes = self.non_max_suppression(
             pred, origin_h, origin_w, conf_thres=CONF_THRESH, nms_thres=IOU_THRESHOLD
@@ -493,6 +530,7 @@ class inferThread(threading.Thread):
     def run(self):
         prev_frame_time = time.time()
         new_frame_time = 0
+        tracker = SortTracker(max_age=1, min_hits=3, iou_threshold=0.5)
         while True:
             start_read = time.time()
             ret, frame = self.cap.read()
@@ -512,7 +550,7 @@ class inferThread(threading.Thread):
             # img = self.image_resize(frame, width=416)
             img=frame
             start_infer = time.time()
-            result, use_time, number_of_objects, time_pre, time_post = self.yolov7_wrapper.infer(img)
+            result, use_time, number_of_objects, time_pre, time_post = self.yolov7_wrapper.infer(img, tracker)
             end_infer = time.time()
 
             
@@ -525,15 +563,15 @@ class inferThread(threading.Thread):
             font = cv2.FONT_HERSHEY_DUPLEX
 
             start_disp = time.time()
-            # cv2.imshow("Recognition result", result)
+            cv2.imshow("Recognition result", result)
             end_disp = time.time()
 
 
-            print(
-                "time total: {:.2f}ms, total infer: {:.2f}ms, time inference: {:.2f}ms, time pre: {:.2f}ms, time post: {:.2f}ms, diff: {:.2f}ms,  read: {:.2f}ms".format(
-                    time_total*1000, (end_infer-start_infer)*1000, use_time * 1000, time_pre*1000, time_post*1000, ((end_infer-start_infer)-use_time-time_pre-time_post)*1000 , (end_read-start_read)*1000
-                )
-            )
+            # print(
+            #     "time total: {:.2f}ms, total infer: {:.2f}ms, time inference: {:.2f}ms, time pre: {:.2f}ms, time post: {:.2f}ms, diff: {:.2f}ms,  read: {:.2f}ms".format(
+            #         time_total*1000, (end_infer-start_infer)*1000, use_time * 1000, time_pre*1000, time_post*1000, ((end_infer-start_infer)-use_time-time_pre-time_post)*1000 , (end_read-start_read)*1000
+            #     )
+            # )
             # print(
             #     "total fps: {:.2f}, total infer fps: {:.2f}, inference fps: {:.2f},   preprocessing fps: {:.2f}ms, postprocessing fps: {:.2f}, reading fps: {:.2f}".format(
             #         fps_total, 1/(end_infer-start_infer), 1 / (use_time) ,1/time_pre, 1/time_post, 1/(end_read-start_read)
@@ -575,10 +613,6 @@ class inferThread(threading.Thread):
 
 
 if __name__ == "__main__":
-    # load custom plugin and engine
-    # Version with input image of 416x416 pixels
-    # PLUGIN_LIBRARY = "../plugins/libmyplugins-416.so"
-    # engine_file_path = "../engines/yolov7-tiny-416.engine"
 
     # Version with input image of 416x416 pixels
     PLUGIN_LIBRARY = "libmyplugins.so"
