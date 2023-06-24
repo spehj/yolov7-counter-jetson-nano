@@ -28,6 +28,9 @@ def iou_batch(bb_test: np.ndarray, bb_gt: np.ndarray):
     Returns:
       np.ndarray: A 2D matrix of shape [N, M] in which each element is the IOU value.
     """
+    if bb_test.shape[0] == 0 or bb_gt.shape[0] == 0:
+        return np.empty((0, 0))
+
     bb_gt = np.expand_dims(bb_gt, 0)
     bb_test = np.expand_dims(bb_test, 1)
 
@@ -44,6 +47,7 @@ def iou_batch(bb_test: np.ndarray, bb_gt: np.ndarray):
         - wh
     )
     return o
+
 
 
 def convert_bbox_to_z(bbox: np.ndarray):
