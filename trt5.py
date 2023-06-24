@@ -68,8 +68,107 @@ def plot_one_box(x, img, color=None, label=None, line_thickness=None):
             lineType=cv2.LINE_AA,
         )
 
+class Tracking():
+    def __init__(self) -> None:
+        self.counter_to_right = 0
+        self.counter_to_left = 0
+        self.detections = {}
+    
+    def process_for_tracking(self, tracking_boxes):
+        """
+        param:
+            tracking_boxes: [x1,y1,x2,y2 track_id, class_id, conf]
+        return:
+            result_boxes: [[x1,y1,x2,y2] [x1,y1,x2,y2] [x1,y1,x2,y2] ]
+            result_trackid: [track_id track_id track_id]
+            result_classid: [classid classid classid]
+            result_scores: [scores scores scores]
+        """
+        result_boxes = tracking_boxes[:, :4] if len(tracking_boxes) else np.array([])
+        result_trackid = tracking_boxes[:, 4] if len(tracking_boxes) else np.array([])
+        result_classid = tracking_boxes[:, 5] if len(tracking_boxes) else np.array([])
+        result_scores = tracking_boxes[:, 6] if len(tracking_boxes) else np.array([])
+        
+        return result_boxes, result_trackid, result_classid, result_scores
+    
+    def count(self, image_raw, result_boxes, result_trackid, result_classid):
+        # To do counting we need
+        # Calculate center_x and center_y
+        img_height, img_width = image_raw.shape[:2]
+        x = img_width // 2
+        counting_class = 0
+        if len(result_boxes) > 0:
+            center_x = (result_boxes[:, 0] + result_boxes[:, 2]) / 2
+            center_y = (result_boxes[:, 1] + result_boxes[:, 3]) / 2
+            # 1. Current status as [center_x, center_y, track_id, class_id]
+            # Combine the arrays
+            current_status = np.column_stack((center_x, center_y, result_trackid, result_classid))
+            # current_status =
+            # [[111.37606153 584.85730603   4.           0.        ]
+            # [ 277.78122332 700.1416417    3.           0.        ]
+            # [ 315.21315656 819.75725727   2.           0.        ]
+            # [ 674.30197419 760.30353343   1.           0.        ]]
+            # print("Types: {}".format(current_status))
+            # 2. A dict: self.detections = {track_id_1: [last_center_x, last_center_y, center_x, center_y, class_id], track_id_2: [last_center_x, last_center_y, center_x, center_y, class_id],}
+            
+            for index, element in enumerate(current_status):
+                track_id = element[2]
+                if track_id in self.detections:
+                    # If tracking id is present in detections, save last x,y position
+                    last_x, last_y = self.detections[track_id][2], self.detections[track_id][3]
+                    # Update detections dictionary - add new values for center x and y
+                    self.detections[track_id] = [last_x, last_y, element[0], element[1], self.detections[track_id][4] ]
+                    if self.detections[track_id][0] < x and self.detections[track_id][2] >= x and int(self.detections[track_id][4]) == counting_class:
+                        self.counter_to_right +=1
+                    elif self.detections[track_id][0] > x and self.detections[track_id][2] <= x and int(self.detections[track_id][4]) == counting_class:
+                        self.counter_to_right -=1
+                else:
+                    # If tracking id is detected first time
+                    last_x, last_y = None, None
+                    self.detections[track_id] = [last_x, last_y, element[0], element[1], element[3]]
 
-class YoLov7TRT(object):
+    def draw_counter(self, image_raw, result_boxes):
+        # Draw points and labels on the original image
+        for j in range(len(result_boxes)):
+            box = result_boxes[j]
+            c_x, c_y = self.calculate_center(bbox=box)
+            center = (c_x, c_y)
+            color = (0, 0, 255) # BGR
+            radius = 5
+            cv2.circle(image_raw, center, radius, color, -1)
+        image_raw = self.display_counter(image_raw)
+        return image_raw
+
+    def calculate_center(self, bbox):
+        x1, y1, x2, y2 = bbox
+        center_x = int((x1 + x2) / 2)
+        center_y = int((y1 + y2) / 2)
+        return center_x, center_y
+
+    def display_counter(self, img):
+        # Draw a counter
+        # Define the position of the text
+        img_height, img_width = img.shape[:2]
+        x = img_width // 2
+        text_position = (x + 10, 50)  # Adjust the coordinates as per your requirement
+
+        # Define the font properties
+        font = cv2.FONT_HERSHEY_SIMPLEX
+        font_scale = 1.2
+        font_color = (255, 0, 0)  # White color in BGR format
+        font_thickness = 2
+        text = str(self.counter_to_right)
+
+        # Put the text on the image
+        cv2.putText(img, text, text_position, font, font_scale, font_color, font_thickness)
+        
+        # Display line
+        line_color = (0, 255, 255)  # Red color in BGR format
+        line_thickness = 2
+        cv2.line(img, (x, 0), (x, img_height), line_color, line_thickness)
+        return img
+
+class YoLov7TRT():
     """
     description: A YOLOv7 class that warps TensorRT ops, preprocess and postprocess ops.
     """
@@ -125,7 +224,7 @@ class YoLov7TRT(object):
         self.counter_to_left = 0
         self.detections = {}
 
-    def infer(self, image, tracker):
+    def infer(self, image):
         # Make self the active context, pushing it on top of the context stack.
         self.ctx.push()
 
@@ -135,7 +234,7 @@ class YoLov7TRT(object):
         end_pre = time.time()
         start = time.time()
         # Copy input image to host buffer
-        np.copyto(self.host_inputs[0], .ravel())
+        np.copyto(self.host_inputs[0], input_image.ravel())
         
         # Transfer input data to the GPU.
         cuda.memcpy_htod_async(self.cuda_inputs[0], self.host_inputs[0])
@@ -158,118 +257,10 @@ class YoLov7TRT(object):
         # Here we use the first row of output in that batch_size = 1
         output = self.host_outputs[0]
         end = time.time()
-
         start_post = time.time()
         # Do postprocess, result: [x1, y1, x2, y2, confidence, class_id]
-        boxes = self.post_process_new(output, origin_h, origin_w)# , result_scores, result_classid = self.post_process_new(output, origin_h, origin_w)
-        
-        tracker_boxes = tracker.update(boxes)
-
-        result_boxes, result_trackid, result_classid, result_scores = self.post_process_tracking(tracker_boxes)
-        
-        detections_dict = {}
-        # To do counting we need
-        # Calculate center_x and center_y
-        img_height, img_width = image_raw.shape[:2]
-        x = img_width // 2
-        counting_class = 0
-        if len(result_boxes) > 0:
-            center_x = (result_boxes[:, 0] + result_boxes[:, 2]) / 2
-            center_y = (result_boxes[:, 1] + result_boxes[:, 3]) / 2
-            # 1. Current status as [center_x, center_y, track_id, class_id]
-            # Combine the arrays
-            current_status = np.column_stack((center_x, center_y, result_trackid, result_classid))
-            # current_status =
-            # [[111.37606153 584.85730603   4.           0.        ]
-            # [ 277.78122332 700.1416417    3.           0.        ]
-            # [ 315.21315656 819.75725727   2.           0.        ]
-            # [ 674.30197419 760.30353343   1.           0.        ]]
-            # print("Types: {}".format(current_status))
-            # 2. A dict: self.detections = {track_id_1: [last_center_x, last_center_y, center_x, center_y, class_id], track_id_2: [last_center_x, last_center_y, center_x, center_y, class_id],}
-            
-            for index, element in enumerate(current_status):
-                track_id = element[2]
-                if track_id in self.detections:
-                    # If tracking id is present in detections, save last x,y position
-                    last_x, last_y = self.detections[track_id][2], self.detections[track_id][3]
-                    # Update detections dictionary - add new values for center x and y
-                    self.detections[track_id] = [last_x, last_y, element[0], element[1], self.detections[track_id][4] ]
-                    if self.detections[track_id][0] < x and self.detections[track_id][2] >= x and int(self.detections[track_id][4]) == counting_class:
-                        self.counter_to_right +=1
-                    elif self.detections[track_id][0] > x and self.detections[track_id][2] <= x and int(self.detections[track_id][4]) == counting_class:
-                        self.counter_to_right -=1
-                else:
-                    # If tracking id is detected first time
-                    last_x, last_y = None, None
-                    self.detections[track_id] = [last_x, last_y, element[0], element[1], element[3]]
-
-        num_of_objects = len(result_classid)
-
-        # Display line
-        image_raw = self.draw_line(img=image_raw)
-
-        # # Draw points and labels on the original image
-        for j in range(len(result_boxes)):
-            box = result_boxes[j]
-            #print(box)
-            
-            c_x, c_y = self.calculate_center(bbox=box)
-            center = (c_x, c_y)
-            color = (0, 0, 255) # BGR
-            radius = 5
-            cv2.circle(image, center, radius, color, -1)
-        image_raw = self.display_counter(image)
-
-        # Display counter
-        # image_raw = self.count_objects(img=image_raw, result_boxes=result_boxes, result_trackid=result_trackid, result_classid=result_classid)
-        
-        end_post = time.time()
-
-        return image_raw, end - start, num_of_objects, end_pre - start_pre, end_post - start_post
-    
-    def count_objects(self):
-        pass
-
-    def display_counter(self, img):
-        # Draw a counter
-        # Define the position of the text
-        img_height, img_width = img.shape[:2]
-        x = img_width // 2
-        text_position = (x + 10, 50)  # Adjust the coordinates as per your requirement
-
-        # Define the font properties
-        font = cv2.FONT_HERSHEY_SIMPLEX
-        font_scale = 0.8
-        font_color = (255, 0, 0)  # White color in BGR format
-        font_thickness = 2
-        text = str(self.counter_to_right)
-
-        # Put the text on the image
-        cv2.putText(img, text, text_position, font, font_scale, font_color, font_thickness)
-        return img
-    # def count_objects(self, img, result_boxes, result_trackid, result_classid):
-    #     # Draw a counter
-    #     # Define the position of the text
-    #     img_height, img_width = img.shape[:2]
-    #     x = img_width // 2
-    #     text_position = (x + 10, 50)  # Adjust the coordinates as per your requirement
-
-    #     # Define the font properties
-    #     font = cv2.FONT_HERSHEY_SIMPLEX
-    #     font_scale = 0.8
-    #     font_color = (255, 0, 0)  # White color in BGR format
-    #     font_thickness = 2
-    #     text = str(len(result_classid))
-
-    #     # Put the text on the image
-    #     cv2.putText(img, text, text_position, font, font_scale, font_color, font_thickness)
-    #     return img
-    def calculate_center(self, bbox):
-
-      x1, y1, x2, y2 = bbox
-      center_x = int((x1 + x2) / 2)
-      center_y = int((y1 + y2) / 2)
-      return center_x, center_y
+        # boxes = self.post_process_new(output, origin_h, origin_w) # , result_scores, result_classid = self.post_process_new(output, origin_h, origin_w)
+        return output, end - start, origin_h, origin_w
 
     def draw_line(self, img):
         img_height, img_width = img.shape[:2]
@@ -530,29 +521,8 @@ class inferThread(threading.Thread):
     def __init__(self, yolov7_wrapper, video_path):
         threading.Thread.__init__(self)
         self.yolov7_wrapper = yolov7_wrapper
-
-        width = 416
-        height = 416
-        framerate = 30
-        # video_path = 'output1.mp4'
-        # script_dir = os.path.dirname(os.path.abspath(__file__))
-        # video_path = os.path.join(script_dir, video_path)
-        # Pipeline working!
         gs_pipeline = "filesrc location={} ! qtdemux ! queue ! h264parse ! omxh264dec ! nvvidconv ! video/x-raw,format=BGRx ! queue ! videoconvert ! queue ! video/x-raw, format=BGR ! appsink".format(video_path)
-        # gs_pipeline = f"filesrc location=output1.mp4 ! qtdemux ! queue ! h264parse ! omxh264dec ! nvvidconv ! video/x-raw,format=BGRx ! queue ! videoconvert ! queue ! video/x-raw, format=BGR ! appsink"
-
-        # gs_pipeline = "gst-launch-1.0 rtspsrc location=rtsp://192.168.1.5:8080/h264_ulaw.sdp latency=100 ! queue ! rtph264depay ! h264parse ! avdec_h264 ! videoconvert ! videoscale ! video/x-raw,width=640,height=480,format=BGR ! appsink drop=1"
-
-        print(f"gst-launch-1.0 {gs_pipeline}\n")
-        # TODO: This needs an optimization
         self.cap = cv2.VideoCapture(gs_pipeline, cv2.CAP_GSTREAMER)
-        # self.cap = cv2.VideoCapture(video_path)
-        # W, H = 416, 416
-        # self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, W)
-        # self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, H)
-        # self.cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc('M', 'J', 'P', 'G'))
-        # self.cap.set(cv2.CAP_PROP_FPS, 30)
-
 
         # Check if the video file was successfully loaded
         if not self.cap.isOpened():
@@ -563,6 +533,7 @@ class inferThread(threading.Thread):
         new_frame_time = 0
         frame_number = 0
         tracker = SortTracker(max_age=3, min_hits=3, iou_threshold=0.3)
+        tracking = Tracking()
         avg_fps = 0
         fps_sum =0
         while True:
@@ -577,18 +548,26 @@ class inferThread(threading.Thread):
             time_total = new_frame_time - prev_frame_time
             prev_frame_time = new_frame_time
             
-            
             if not ret:
                 break
             
             
             # img = self.image_resize(frame, width=416)
-            img=frame
+            image_raw=frame
             start_infer = time.time()
-            result, use_time, number_of_objects, time_pre, time_post = self.yolov7_wrapper.infer(img, tracker)
+            
+            # Do inference
+            output, use_time, origin_h, origin_w = self.yolov7_wrapper.infer(image_raw)
             end_infer = time.time()
 
+            # Postprocessing
+            boxes = self.yolov7_wrapper.post_process_new(output, origin_h, origin_w)
             
+            # Tracking
+            tracker_boxes = tracker.update(boxes)
+            result_boxes, result_trackid, result_classid, result_scores = tracking.process_for_tracking(tracking_boxes=tracker_boxes)
+            tracking.count(image_raw=image_raw, result_boxes=result_boxes, result_trackid=result_trackid, result_classid=result_classid)
+            result = tracking.draw_counter(image_raw=image_raw, result_boxes=result_boxes)
 
             # Inference FPS:
             fps_infer = 1 / (use_time)
@@ -610,11 +589,11 @@ class inferThread(threading.Thread):
             fps_sum +=fps_total
             avg_fps = fps_sum/frame_number
             # print("Frame number: {}".format(frame_number))
-            print(
-                "avg fps: {:.2f}, total infer fps: {:.2f}, inference fps: {:.2f},   preprocessing fps: {:.2f}ms, postprocessing fps: {:.2f}, reading fps: {:.2f}".format(
-                    avg_fps, 1/(end_infer-start_infer), 1 / (use_time) ,1/time_pre, 1/time_post, 1/(end_read-start_read)
-                )
-            )
+            # print(
+            #     "avg fps: {:.2f}, total infer fps: {:.2f}, inference fps: {:.2f},   preprocessing fps: {:.2f}ms, postprocessing fps: {:.2f}, reading fps: {:.2f}".format(
+            #         avg_fps, 1/(end_infer-start_infer), 1 / (use_time) ,1/time_pre, 1/time_post, 1/(end_read-start_read)
+            #     )
+            # )
             # print(
             #     "total fps: {:.2f}, total infer fps: {:.2f}, inference fps: {:.2f},   preprocessing fps: {:.2f}ms, postprocessing fps: {:.2f}, reading fps: {:.2f}".format(
             #         fps_total, 1/(end_infer-start_infer), 1 / (use_time) ,1/time_pre, 1/time_post, 1/(end_read-start_read)
@@ -635,7 +614,7 @@ class inferThread(threading.Thread):
             return image
 
         # check to see if the width is None
-        if width is None:
+        if width is None and height is not None:
             # calculate the ratio of the height and construct the
             # dimensions
             r = height / float(h)
