@@ -41,6 +41,7 @@ class Tracking():
         self.counter_to_right = 0
         self.counter_to_left = 0
         self.detections = {}
+        self.count_drawings = []
     
     def process_for_tracking(self, tracking_boxes):
         """
@@ -96,17 +97,19 @@ class Tracking():
                     last_x, last_y = None, None
                     self.detections[track_id] = [last_x, last_y, element[0], element[1], element[3]]
 
-    def draw_counter(self, image_raw, result_boxes):
+    def draw_counter(self, image, result_boxes, frame_counter):
         # Draw points and labels on the original image
+        print("Result boxes: ", result_boxes)
         for j in range(len(result_boxes)):
             box = result_boxes[j]
             c_x, c_y = self.calculate_center(bbox=box)
             center = (c_x, c_y)
             color = (0, 0, 255) # BGR
             radius = 5
-            cv2.circle(image_raw, center, radius, color, -1)
-        image_raw = self.display_counter(image_raw)
-        return image_raw
+            cv2.circle(image, center, radius, color, -1)
+        image = self.display_counter(image)
+        # print("FRAME: ", frame_counter)
+        return image
 
     def calculate_center(self, bbox):
         x1, y1, x2, y2 = bbox
@@ -486,7 +489,7 @@ class DisplayThread(threading.Thread):
         self.frame_counter = 0
         self.timer = TimerFps()
         self.results = []
-        self.image_raw = None
+        self.img= None
 
     def run(self):
         counter = 0
@@ -497,7 +500,7 @@ class DisplayThread(threading.Thread):
             self.results = self.frame_queue.get()  # Get frame from the queue
             
             self.frame_counter += 1
-            image_raw, output, use_time, origin_h, origin_w, frame_counter = self.results
+            img, output, use_time, origin_h, origin_w, frame_counter = self.results
             print("Recived {}...".format(frame_counter))
 
             # Postprocessing
@@ -508,13 +511,13 @@ class DisplayThread(threading.Thread):
             result_boxes, result_trackid, result_classid, result_scores = self.tracking.process_for_tracking(tracking_boxes=tracker_boxes)
             # Counting
             print("Counting {}...".format(frame_counter))
-            self.tracking.count(image_raw=image_raw, result_boxes=result_boxes, result_trackid=result_trackid, result_classid=result_classid)
+            self.tracking.count(image_raw=img, result_boxes=result_boxes, result_trackid=result_trackid, result_classid=result_classid)
             # Draw results of counting to the image
             print("Drawing {}...".format(frame_counter))
-            result = self.tracking.draw_counter(image_raw=image_raw, result_boxes=result_boxes)
+            img = self.tracking.draw_counter(image=img, result_boxes=result_boxes, frame_counter=frame_counter)
 
             print("Displaying {}... pid: {}".format(frame_counter, os.getpid()))
-            cv2.imshow('Display', result)
+            cv2.imshow('Display', img)
             current_time, avg_time, avg_fps = self.timer.update(self.frame_counter)
             time_end = time.time()
             sum_t += (time_end-time_start)
@@ -538,7 +541,7 @@ if __name__ == '__main__':
     sort_tracker = SortTracker(max_age=3, min_hits=3, iou_threshold=0.3)
     tracking = Tracking()
 
-    max_queue_size = 0  # Maximum size of the frame queue
+    max_queue_size = 3  # Maximum size of the frame queue
     frame_queue = Queue(maxsize=max_queue_size)
 
     infer_thread = InferThread(frame_queue=frame_queue, max_queue_size=max_queue_size, yolov7=yolov7, video_path=video_path)
