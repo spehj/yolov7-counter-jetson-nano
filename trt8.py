@@ -1,21 +1,15 @@
-import threading
+import cv2
+import time
+from multiprocessing import Process, Queue, set_start_method
 import cv2
 import time
 from queue import Queue
 import ctypes
-import os
-import shutil
-import random
-import sys
 import numpy as np
 import pycuda.autoinit
 import pycuda.driver as cuda
 import tensorrt as trt
 from sort1 import SortTracker
-
-
-CONF_THRESH = 0.5
-IOU_THRESHOLD = 0.45
 
 
 class TimerFps():
@@ -426,15 +420,15 @@ class YoLov7TRT():
         boxes = np.stack(keep_boxes, 0) if len(keep_boxes) else np.array([])
         return boxes
 
-class InferThread(threading.Thread):
-    def __init__(self, frame_queue : Queue, max_queue_size, yolov7 : YoLov7TRT, video_path):
+class InferProcess(Process):
+    def __init__(self, frame_queue : Queue, engine_file_path, video_path):
         super().__init__()
         self.frame_queue = frame_queue
-        self.max_queue_size = max_queue_size
-        self.yolov7 = yolov7
-        self.gs_pipeline = "filesrc location={} ! qtdemux ! queue ! h264parse ! omxh264dec ! nvvidconv ! video/x-raw,format=BGRx ! queue ! videoconvert ! queue ! video/x-raw, format=BGR ! appsink".format(video_path)
+        self.yolov7 = YoLov7TRT(engine_file_path)
+        self.gs_pipeline  = "filesrc location={} ! qtdemux ! queue ! h264parse ! omxh264dec ! nvvidconv ! video/x-raw,format=BGRx ! queue ! videoconvert ! queue ! video/x-raw, format=BGR ! appsink".format(video_path)
         self.timer = TimerFps()
         self.frame_counter = 0
+        
 
     def run(self):
         
@@ -469,18 +463,18 @@ class InferThread(threading.Thread):
             self.frame_queue.put(results)
             print("Sent: {} ...".format(self.frame_counter))
             current_time, avg_time, avg_fps = self.timer.update(self.frame_counter)
-            print("Time InferThread: {:.2f}ms | avg: {:.2f}ms | avg fps: {:.2f}".format(current_time*1000, avg_time*1000, avg_fps))
+            print("Time InferProcess: {:.2f}ms | avg: {:.2f}ms | avg fps: {:.2f}".format(current_time*1000, avg_time*1000, avg_fps))
 
             
 
         self.cap.release()
 
 
-class DisplayThread(threading.Thread):
-    def __init__(self, frame_queue : Queue, yolov7 : YoLov7TRT, sort_tracker : SortTracker, tracking : Tracking):
+class DisplayProcess(Process):
+    def __init__(self, frame_queue : Queue, engine_file_path, sort_tracker : SortTracker, tracking : Tracking):
         super().__init__()
         self.frame_queue = frame_queue
-        self.yolov7 = yolov7
+        self.yolov7 = YoLov7TRT(engine_file_path)
         self.sort_tracker = sort_tracker
         self.tracking = tracking
         self.frame_counter = 0
@@ -527,6 +521,7 @@ class DisplayThread(threading.Thread):
             self.frame_queue.task_done()
             print("Finished {}...".format(frame_counter))
 
+
 if __name__ == '__main__':
     # Load custom plugin and engine
     PLUGIN_LIBRARY = "libmyplugins.so"
@@ -534,20 +529,18 @@ if __name__ == '__main__':
     video_path = "pigs-trimmed-h264-1080p.mov"
     ctypes.CDLL(PLUGIN_LIBRARY)
 
-    yolov7 = YoLov7TRT(engine_file_path)
+    
     sort_tracker = SortTracker(max_age=3, min_hits=3, iou_threshold=0.3)
     tracking = Tracking()
+    frame_queue = Queue()
+    set_start_method('spawn')
+    infer_process = InferProcess(frame_queue=frame_queue, engine_file_path=engine_file_path, video_path=video_path)
+    display_process = DisplayProcess(frame_queue=frame_queue,engine_file_path=engine_file_path, sort_tracker=sort_tracker, tracking=tracking)
 
-    max_queue_size = 0  # Maximum size of the frame queue
-    frame_queue = Queue(maxsize=max_queue_size)
+    infer_process.start()
+    display_process.start()
 
-    infer_thread = InferThread(frame_queue=frame_queue, max_queue_size=max_queue_size, yolov7=yolov7, video_path=video_path)
-    display_thread = DisplayThread(frame_queue=frame_queue, yolov7=yolov7, sort_tracker=sort_tracker, tracking=tracking)
-    infer_thread.start()
-    display_thread.start()
-
-    infer_thread.join()
-    frame_queue.join()
-    display_thread.join()
+    infer_process.join()
+    display_process.join()
 
     cv2.destroyAllWindows()
