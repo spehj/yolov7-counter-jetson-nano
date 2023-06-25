@@ -437,12 +437,17 @@ class InferThread(threading.Thread):
         self.frame_counter = 0
 
     def run(self):
+        
         self.cap = cv2.VideoCapture(self.gs_pipeline, cv2.CAP_GSTREAMER)
         # Check if the video file was successfully loaded
         if not self.cap.isOpened():
             print("Error opening video file ...")
             raise Exception("Error opening video file...")
+        counter = 0
+        avg_t = 0.0
+        sum_t = 0.0
         while True:
+            time_start = time.time()
             if True: # self.frame_queue.qsize() < self.max_queue_size:
                 ret, image_raw = self.cap.read()
                 #print("Reading ...")
@@ -451,9 +456,8 @@ class InferThread(threading.Thread):
                 self.frame_counter += 1
                 # Do inference
                 output, use_time, origin_h, origin_w = self.yolov7.infer(image_raw)
-                # Postprocessing
-                boxes = self.yolov7.post_process(output, origin_h, origin_w)
-                results = [image_raw, output, use_time, origin_h, origin_w, boxes]
+                
+                results = [image_raw, output, use_time, origin_h, origin_w]
                 # Put results in queue
                 self.frame_queue.put(results)
                 current_time, avg_time, avg_fps = self.timer.update(self.frame_counter)
@@ -461,6 +465,11 @@ class InferThread(threading.Thread):
             else:
                 print("SLEEPING")
                 time.sleep(0.08)  # Wait if queue is full
+            time_end = time.time()
+            sum_t += (time_end-time_start)
+            counter+=1
+            avg_t = sum_t/counter
+            print("Duration InferThread: {:.2f}ms, avg: {:.2f}".format((time_end-time_start)*1000, avg_t*1000))
 
         self.cap.release()
 
@@ -476,15 +485,17 @@ class DisplayThread(threading.Thread):
         self.timer = TimerFps()
 
     def run(self):
-        
+        counter = 0
+        avg_t = 0.0
+        sum_t = 0.0
         while True:
             time_start = time.time()
             results = self.frame_queue.get()  # Get frame from the queue
             self.frame_counter += 1
-            image_raw, output, use_time, origin_h, origin_w, boxes = results
+            image_raw, output, use_time, origin_h, origin_w = results
 
-            # # Postprocessing
-            # boxes = self.yolov7.post_process(output, origin_h, origin_w)
+            # Postprocessing
+            boxes = self.yolov7.post_process(output, origin_h, origin_w)
             # Tracking
             tracker_boxes = self.sort_tracker.update(boxes)
             # Process results from sort tracker
@@ -498,7 +509,10 @@ class DisplayThread(threading.Thread):
             cv2.imshow('Display', result)
             current_time, avg_time, avg_fps = self.timer.update(self.frame_counter)
             time_end = time.time()
-            print("Duration DisplayThread: {:.2f}ms".format((time_end-time_start)*1000))
+            sum_t += (time_end-time_start)
+            counter+=1
+            avg_t = sum_t/counter
+            print("Duration DisplayThread: {:.2f}ms, avg: {:.2f}".format((time_end-time_start)*1000, avg_t*1000))
             #print("Time DisplayThread: {:.2f}ms | avg: {:.2f}ms | avg fps: {:.2f}".format(current_time*1000, avg_time*1000, avg_fps))
             cv2.waitKey(1)
         
