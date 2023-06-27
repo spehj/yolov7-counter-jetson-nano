@@ -13,7 +13,7 @@ import numpy as np
 import pycuda.autoinit
 import pycuda.driver as cuda
 import tensorrt as trt
-from sort1 import SortTracker
+from sort import SortTracker
 
 CONF_THRESH = 0.5 # was 0.5
 IOU_THRESHOLD = 0.45
@@ -489,7 +489,7 @@ if __name__ == "__main__":
     # Version with input image of 416x416 pixels
     PLUGIN_LIBRARY = "libmyplugins.so"
     engine_file_path = "yolov7-tiny-rep-best.engine"
-    video_path = "pigs-trimmed-h264-1080p.mov"# "pigs-trimmed-2.mov"#   pigs-trimmed-h264-1080p.mov "output1.mp4" # file_example_MP4_480_1_5MG.mp4
+    video_path = "demo.mp4"# "pigs-trimmed-2.mov"#   pigs-trimmed-h264-1080p.mov "output1.mp4" # file_example_MP4_480_1_5MG.mp4
 
     if len(sys.argv) > 1:
         engine_file_path = sys.argv[1]
@@ -504,9 +504,7 @@ if __name__ == "__main__":
         "person",
     ]
 
-    if os.path.exists("output/"):
-        shutil.rmtree("output/")
-    os.makedirs("output/")
+    
     # a YoLov7TRT instance
     yolov7 = YoLov7TRT(engine_file_path)
     try:

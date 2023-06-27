@@ -534,7 +534,7 @@ if __name__ == '__main__':
     # Load custom plugin and engine
     PLUGIN_LIBRARY = "libmyplugins.so"
     engine_file_path = "yolov7-tiny-rep-best.engine"
-    video_path = "pigs-trimmed-h264-1080p.mov"
+    video_path = "demo.mp4"
     ctypes.CDLL(PLUGIN_LIBRARY)
 
     yolov7 = YoLov7TRT(engine_file_path)
