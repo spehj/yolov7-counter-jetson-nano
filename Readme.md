@@ -10,9 +10,6 @@ Comes with preinstalled:
 - Numpy
 - Seaborn
 - Filterpy
-```
-
-```
 
 ## How to train your own YOLOv7 Tiny model to be used on Jetson Nano
 1. Annotate images using CVAT. Download annotations in YOLO format. Make sure image names match annotations (.txt): example: 1.jpg and 1.txt, 101.jpg and 101.txt etc.
