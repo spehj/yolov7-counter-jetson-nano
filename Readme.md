@@ -1,4 +1,9 @@
 # Counting Pigs with tensorRT yolov7 and Python on Jetson Nano
+
+
+https://github.com/spehj/yolov7-counter-jetson-nano/assets/62114221/02a959d2-2278-4446-af69-2f107ff570bb
+
+
 This is repository with complete tutorial on how to make a computer vision object counter application using Jetson Nano, TensorRT, YOLOv7 tiny in Python. I also included scripts to custom train your YOLOv7tiny on Google Colab.
 
 All code on Jetson Nano runs in Docker container. No hassle with compiling OpenCV with CUDA and searching for right PyTorch version for Jetson Nano.
