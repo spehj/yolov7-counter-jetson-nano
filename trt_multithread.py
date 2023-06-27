@@ -1,78 +1,47 @@
-"""
-An example that uses TensorRT's Python api to make inferences.
-"""
+import threading
+import cv2
+import time
+from queue import Queue
 import ctypes
 import os
 import shutil
 import random
 import sys
-import threading
-import time
-import cv2
 import numpy as np
 import pycuda.autoinit
 import pycuda.driver as cuda
 import tensorrt as trt
-from sort1 import SortTracker
+from sort import SortTracker
 
-CONF_THRESH = 0.5 # was 0.5
+
+CONF_THRESH = 0.5
 IOU_THRESHOLD = 0.45
-    
-def get_img_path_batches(batch_size, img_dir):
-    ret = []
-    batch = []
-    for root, dirs, files in os.walk(img_dir):
-        for name in files:
-            if len(batch) == batch_size:
-                ret.append(batch)
-                batch = []
-            batch.append(os.path.join(root, name))
-    if len(batch) > 0:
-        ret.append(batch)
-    return ret
 
 
-def plot_one_box(x, img, color=None, label=None, line_thickness=None):
-    """
-    description: Plots one bounding box on image img,
-                 this function comes from YoLov7 project.
-    param:
-        x:      a box likes [x1,y1,x2,y2]
-        img:    a opencv image object
-        color:  color to draw rectangle, such as (0,255,0)
-        label:  str
-        line_thickness: int
-    return:
-        no return
+class TimerFps():
+    def __init__(self) -> None:
+        self.sum_time = 0.0
+        self.avg_time = 0.0
+        self.time_before = None
 
-    """
-    tl = (
-        line_thickness or round(0.002 * (img.shape[0] + img.shape[1]) / 2) + 1
-    )  # line/font thickness
-    color = color or [random.randint(0, 255) for _ in range(3)]
-    c1, c2 = (int(x[0]), int(x[1])), (int(x[2]), int(x[3]))
-    cv2.rectangle(img, c1, c2, color, thickness=tl, lineType=cv2.LINE_AA)
-    if label:
-        tf = max(tl - 1, 1)  # font thickness
-        t_size = cv2.getTextSize(label, 0, fontScale=tl / 3, thickness=tf)[0]
-        c2 = c1[0] + t_size[0], c1[1] - t_size[1] - 3
-        cv2.rectangle(img, c1, c2, color, -1, cv2.LINE_AA)  # filled
-        cv2.putText(
-            img,
-            label,
-            (c1[0], c1[1] - 2),
-            0,
-            tl / 3,
-            [225, 255, 255],
-            thickness=tf,
-            lineType=cv2.LINE_AA,
-        )
+    def update(self, frame_counter):
+        time_now = time.time()
+        current_time = 0.0
+        fps = 0.0
+        if self.time_before is not None:
+            current_time = time_now-self.time_before
+            self.sum_time += current_time
+            self.avg_time = self.sum_time/frame_counter
+            fps = 1/(self.avg_time)
+        self.time_before = time_now
+        return current_time, self.avg_time, fps
 
 class Tracking():
     def __init__(self) -> None:
         self.counter_to_right = 0
         self.counter_to_left = 0
         self.detections = {}
+        self.count_drawings = []
     
     def process_for_tracking(self, tracking_boxes):
         """
@@ -108,10 +77,11 @@ class Tracking():
             # [ 277.78122332 700.1416417    3.           0.        ]
             # [ 315.21315656 819.75725727   2.           0.        ]
             # [ 674.30197419 760.30353343   1.           0.        ]]
-            # print("Types: {}".format(current_status))
-            # 2. A dict: self.detections = {track_id_1: [last_center_x, last_center_y, center_x, center_y, class_id], track_id_2: [last_center_x, last_center_y, center_x, center_y, class_id],}
+
+            # 2. A dict: 
+            # self.detections = {track_id_1: [last_center_x, last_center_y, center_x, center_y, class_id], track_id_2: [last_center_x, last_center_y, center_x, center_y, class_id],}
             
-            for index, element in enumerate(current_status):
+            for element in current_status:
                 track_id = element[2]
                 if track_id in self.detections:
                     # If tracking id is present in detections, save last x,y position
@@ -127,17 +97,19 @@ class Tracking():
                     last_x, last_y = None, None
                     self.detections[track_id] = [last_x, last_y, element[0], element[1], element[3]]
 
-    def draw_counter(self, image_raw, result_boxes):
+    def draw_counter(self, image, result_boxes, frame_counter):
         # Draw points and labels on the original image
+        # print("Result boxes: ", result_boxes)
         for j in range(len(result_boxes)):
             box = result_boxes[j]
             c_x, c_y = self.calculate_center(bbox=box)
             center = (c_x, c_y)
             color = (0, 0, 255) # BGR
             radius = 5
-            cv2.circle(image_raw, center, radius, color, -1)
-        image_raw = self.display_counter(image_raw)
-        return image_raw
+            cv2.circle(image, center, radius, color, -1)
+        image = self.display_counter(image)
+        # print("FRAME: ", frame_counter)
+        return image
 
     def calculate_center(self, bbox):
         x1, y1, x2, y2 = bbox
@@ -220,9 +192,6 @@ class YoLov7TRT():
         self.cuda_outputs = cuda_outputs
         self.bindings = bindings
         self.batch_size = engine.max_batch_size
-        self.counter_to_right = 0
-        self.counter_to_left = 0
-        self.detections = {}
 
     def infer(self, image):
         # Make self the active context, pushing it on top of the context stack.
@@ -250,25 +219,15 @@ class YoLov7TRT():
         # Synchronize the stream
         self.stream.synchronize()
         
-
         # Remove any context from the top of the context stack, deactivating it.
         self.ctx.pop()
 
         # Here we use the first row of output in that batch_size = 1
         output = self.host_outputs[0]
         end = time.time()
-        start_post = time.time()
         # Do postprocess, result: [x1, y1, x2, y2, confidence, class_id]
-        # boxes = self.post_process_new(output, origin_h, origin_w) # , result_scores, result_classid = self.post_process_new(output, origin_h, origin_w)
-        return output, end - start, origin_h, origin_w
+        return output, end - start, origin_h, origin_w, end_pre-start_pre
 
-    def draw_line(self, img):
-        img_height, img_width = img.shape[:2]
-        x = img_width // 2
-        line_color = (0, 255, 255)  # Red color in BGR format
-        line_thickness = 2
-        cv2.line(img, (x, 0), (x, img_height), line_color, line_thickness)
-        return img
     def destroy(self):
         # Remove any context from the top of the context stack, deactivating it.
         self.ctx.pop()
@@ -368,24 +327,7 @@ class YoLov7TRT():
 
         return y
     
-    def post_process_tracking(self, tracking_boxes):
-        """
-        param:
-            tracking_boxes: [x1,y1,x2,y2 track_id, class_id, conf]
-        return:
-            result_boxes: [[x1,y1,x2,y2] [x1,y1,x2,y2] [x1,y1,x2,y2] ]
-            result_trackid: [track_id track_id track_id]
-            result_classid: [classid classid classid]
-            result_scores: [scores scores scores]
-        """
-        result_boxes = tracking_boxes[:, :4] if len(tracking_boxes) else np.array([])
-        result_trackid = tracking_boxes[:, 4] if len(tracking_boxes) else np.array([])
-        result_classid = tracking_boxes[:, 5] if len(tracking_boxes) else np.array([])
-        result_scores = tracking_boxes[:, 6] if len(tracking_boxes) else np.array([])
-        
-        return result_boxes, result_trackid, result_classid, result_scores
-    
-    def post_process_new(self, output, origin_h, origin_w):
+    def post_process(self, output, origin_h, origin_w):
         """
         description: postprocess the prediction
         param:
@@ -405,36 +347,7 @@ class YoLov7TRT():
         boxes = self.non_max_suppression(
             pred, origin_h, origin_w, conf_thres=CONF_THRESH, nms_thres=IOU_THRESHOLD
         )
-        # result_boxes = boxes[:, :4] if len(boxes) else np.array([])
-        # result_scores = boxes[:, 4] if len(boxes) else np.array([])
-        # result_classid = boxes[:, 5] if len(boxes) else np.array([])
-        # 
         return boxes # , result_boxes, result_scores, result_classid
-
-    def post_process(self, output, origin_h, origin_w):
-        """
-        description: postprocess the prediction
-        param:
-            output:     A numpy likes [num_boxes,cx,cy,w,h,conf,cls_id, cx,cy,w,h,conf,cls_id, ...]
-            origin_h:   height of original image
-            origin_w:   width of original image
-        return:
-            result_boxes: finally boxes, a boxes numpy, each row is a box [x1, y1, x2, y2]
-            result_scores: finally scores, a numpy, each element is the score correspoing to box
-            result_classid: finally classid, a numpy, each element is the classid correspoing to box
-        """
-        # Get the num of boxes detected
-        num = int(output[0])
-        # Reshape to a two dimentional ndarray
-        pred = np.reshape(output[1:], (-1, 6))[:num, :]
-        # Do nms
-        boxes = self.non_max_suppression(
-            pred, origin_h, origin_w, conf_thres=CONF_THRESH, nms_thres=IOU_THRESHOLD
-        )
-        result_boxes = boxes[:, :4] if len(boxes) else np.array([])
-        result_scores = boxes[:, 4] if len(boxes) else np.array([])
-        result_classid = boxes[:, 5] if len(boxes) else np.array([])
-        return result_boxes, result_scores, result_classid
 
     def bbox_iou(self, box1, box2, x1y1x2y2=True):
         """
@@ -516,158 +429,128 @@ class YoLov7TRT():
         boxes = np.stack(keep_boxes, 0) if len(keep_boxes) else np.array([])
         return boxes
 
-
-class inferThread(threading.Thread):
-    def __init__(self, yolov7_wrapper, video_path):
-        threading.Thread.__init__(self)
-        self.yolov7_wrapper = yolov7_wrapper
-        gs_pipeline = "filesrc location={} ! qtdemux ! queue ! h264parse ! omxh264dec ! nvvidconv ! video/x-raw,format=BGRx ! queue ! videoconvert ! queue ! video/x-raw, format=BGR ! appsink".format(video_path)
-        self.cap = cv2.VideoCapture(gs_pipeline, cv2.CAP_GSTREAMER)
-
-        # Check if the video file was successfully loaded
-        if not self.cap.isOpened():
-            print("Error opening video file")
+class InferThread(threading.Thread):
+    def __init__(self, frame_queue : Queue, max_queue_size, yolov7 : YoLov7TRT, video_path):
+        super().__init__()
+        self.frame_queue = frame_queue
+        self.max_queue_size = max_queue_size
+        self.yolov7 = yolov7
+        self.gs_pipeline = "filesrc location={} ! qtdemux ! queue ! h264parse ! omxh264dec ! nvvidconv ! video/x-raw,format=BGRx ! queue ! videoconvert ! queue ! video/x-raw, format=BGR ! appsink".format(video_path)
+        self.timer = TimerFps()
+        self.frame_counter = 0
 
     def run(self):
-        prev_frame_time = time.time()
-        new_frame_time = 0
-        frame_number = 0
-        tracker = SortTracker(max_age=3, min_hits=3, iou_threshold=0.3)
-        tracking = Tracking()
-        avg_fps = 0
-        fps_sum =0
+        
+        self.cap = cv2.VideoCapture(self.gs_pipeline, cv2.CAP_GSTREAMER)
+        
+        # Check if the video file was successfully loaded
+        if not self.cap.isOpened():
+            print("Error opening video file ...")
+            raise Exception("Error opening video file...")
+        counter = 0
+        avg_t = 0.0
+        sum_t = 0.0
         while True:
-            frame_number +=1
-            start_read = time.time()
-            ret, frame = self.cap.read()
-            end_read = time.time()
-
-            new_frame_time = time.time()
-            # Calculate FPS of complete processing time of one frame (not just inference)
-            fps_total = float(1 / (new_frame_time - prev_frame_time))
-            time_total = new_frame_time - prev_frame_time
-            prev_frame_time = new_frame_time
-            
+            self.frame_counter += 1
+            #print("Capturing: {} ...".format(self.frame_counter))
+            ret, image_raw = self.cap.read()
+            #print("Captured: {} ...".format(self.frame_counter))
+            #print("Reading ...")
             if not ret:
                 break
             
-            
-            # img = self.image_resize(frame, width=416)
-            image_raw=frame
-            start_infer = time.time()
-            
+            time_start = time.time()
             # Do inference
-            output, use_time, origin_h, origin_w = self.yolov7_wrapper.infer(image_raw)
-            end_infer = time.time()
+            output, use_time, origin_h, origin_w, preproc_time = self.yolov7.infer(image_raw)
+            time_end = time.time()
+            sum_t += (time_end-time_start)
+            avg_t = sum_t/self.frame_counter
+            #print("Duration InfThread: {:.2f}ms,\tavg: {:.2f},\tuse time: {:.2f},\tpreproc: {:.2f}ms".format((time_end-time_start)*1000, avg_t*1000, use_time*1000, preproc_time*1000))
+            
+            results = [image_raw, output, use_time, origin_h, origin_w, self.frame_counter]
+            # Put results in queue
+            self.frame_queue.put(results)
+            print("Sent: {} ...".format(self.frame_counter))
+            current_time, avg_time, avg_fps = self.timer.update(self.frame_counter)
+            print("Time InferThread: {:.2f}ms | avg: {:.2f}ms | avg fps: {:.2f}".format(current_time*1000, avg_time*1000, avg_fps))
+
+            
+
+        self.cap.release()
+
+
+class DisplayThread(threading.Thread):
+    def __init__(self, frame_queue : Queue, yolov7 : YoLov7TRT, sort_tracker : SortTracker, tracking : Tracking):
+        super().__init__()
+        self.frame_queue = frame_queue
+        self.yolov7 = yolov7
+        self.sort_tracker = sort_tracker
+        self.tracking = tracking
+        self.frame_counter = 0
+        self.timer = TimerFps()
+        self.results = []
+        self.img= None
+
+    def run(self):
+        counter = 0
+        avg_t = 0.0
+        sum_t = 0.0
+        while True:
+            time_start = time.time()
+            self.results = self.frame_queue.get()  # Get frame from the queue
+            
+            self.frame_counter += 1
+            img, output, use_time, origin_h, origin_w, frame_counter = self.results
+            print("Recived {}...".format(frame_counter))
 
             # Postprocessing
-            boxes = self.yolov7_wrapper.post_process_new(output, origin_h, origin_w)
-            
+            boxes = self.yolov7.post_process(output, origin_h, origin_w)
             # Tracking
-            tracker_boxes = tracker.update(boxes)
-            result_boxes, result_trackid, result_classid, result_scores = tracking.process_for_tracking(tracking_boxes=tracker_boxes)
-            tracking.count(image_raw=image_raw, result_boxes=result_boxes, result_trackid=result_trackid, result_classid=result_classid)
-            result = tracking.draw_counter(image_raw=image_raw, result_boxes=result_boxes)
+            tracker_boxes = self.sort_tracker.update(boxes)
+            # Process results from sort tracker
+            result_boxes, result_trackid, result_classid, result_scores = self.tracking.process_for_tracking(tracking_boxes=tracker_boxes)
+            # Counting
+            print("Counting {}...".format(frame_counter))
+            self.tracking.count(image_raw=img, result_boxes=result_boxes, result_trackid=result_trackid, result_classid=result_classid)
+            # Draw results of counting to the image
+            print("Drawing {}...".format(frame_counter))
+            img = self.tracking.draw_counter(image=img, result_boxes=result_boxes, frame_counter=frame_counter)
 
-            # Inference FPS:
-            fps_infer = 1 / (use_time)
-            fps_infer = format(fps_infer, '.2f')
-            fps_str = str(fps_infer) + " FPS"
-            yolo_model_name = "YOLOv7-tiny TRT"
-            font = cv2.FONT_HERSHEY_DUPLEX
+            print("Displaying {}...".format(frame_counter))
+            cv2.imshow('Display', img)
+            current_time, avg_time, avg_fps = self.timer.update(self.frame_counter)
+            time_end = time.time()
+            sum_t += (time_end-time_start)
+            counter+=1
+            avg_t = sum_t/counter
+            #print("Duration DisThread: {:.2f}ms,\tavg: {:.2f}".format((time_end-time_start)*1000, avg_t*1000))
+            #print("Time DisplayThread: {:.2f}ms | avg: {:.2f}ms | avg fps: {:.2f}".format(current_time*1000, avg_time*1000, avg_fps))
+            cv2.waitKey(1)
+        
+            self.frame_queue.task_done()
+            print("Finished {}...".format(frame_counter))
 
-            start_disp = time.time()
-            cv2.imshow("Recognition result", result)
-            end_disp = time.time()
-
-
-            # print(
-            #     "time total: {:.2f}ms, total infer: {:.2f}ms, time inference: {:.2f}ms, time pre: {:.2f}ms, time post: {:.2f}ms, diff: {:.2f}ms,  read: {:.2f}ms".format(
-            #         time_total*1000, (end_infer-start_infer)*1000, use_time * 1000, time_pre*1000, time_post*1000, ((end_infer-start_infer)-use_time-time_pre-time_post)*1000 , (end_read-start_read)*1000
-            #     )
-            # )
-            fps_sum +=fps_total
-            avg_fps = fps_sum/frame_number
-            # print("Frame number: {}".format(frame_number))
-            # print(
-            #     "avg fps: {:.2f}, total infer fps: {:.2f}, inference fps: {:.2f},   preprocessing fps: {:.2f}ms, postprocessing fps: {:.2f}, reading fps: {:.2f}".format(
-            #         avg_fps, 1/(end_infer-start_infer), 1 / (use_time) ,1/time_pre, 1/time_post, 1/(end_read-start_read)
-            #     )
-            # )
-            # print(
-            #     "total fps: {:.2f}, total infer fps: {:.2f}, inference fps: {:.2f},   preprocessing fps: {:.2f}ms, postprocessing fps: {:.2f}, reading fps: {:.2f}".format(
-            #         fps_total, 1/(end_infer-start_infer), 1 / (use_time) ,1/time_pre, 1/time_post, 1/(end_read-start_read)
-            #     )
-            # )
-            if cv2.waitKey(1) & 0xFF == ord("q"):
-                break
-    
-    def image_resize(self, image, width = None, height = None, inter = cv2.INTER_AREA):
-        # initialize the dimensions of the image to be resized and
-        # grab the image size
-        dim = None
-        (h, w) = image.shape[:2]
-
-        # if both the width and height are None, then return the
-        # original image
-        if width is None and height is None:
-            return image
-
-        # check to see if the width is None
-        if width is None and height is not None:
-            # calculate the ratio of the height and construct the
-            # dimensions
-            r = height / float(h)
-            dim = (int(w * r), height)
-
-        # otherwise, the height is None
-        else:
-            # calculate the ratio of the width and construct the
-            # dimensions
-            r = width / float(w)
-            dim = (width, int(h * r))
-
-        # resize the image
-        resized = cv2.resize(image, dim, interpolation = inter)
-
-        # return the resized image
-        return resized
-
-
-if __name__ == "__main__":
-    # load custom plugin and engine
-    # Version with input image of 416x416 pixels
+if __name__ == '__main__':
+    # Load custom plugin and engine
     PLUGIN_LIBRARY = "libmyplugins.so"
     engine_file_path = "yolov7-tiny-rep-best.engine"
-    video_path = "pigs-trimmed-h264-1080p.mov"# "pigs-trimmed-2.mov"#   pigs-trimmed-h264-1080p.mov "output1.mp4" # file_example_MP4_480_1_5MG.mp4
-
-    if len(sys.argv) > 1:
-        engine_file_path = sys.argv[1]
-    if len(sys.argv) > 2:
-        PLUGIN_LIBRARY = sys.argv[2]
-
+    video_path = "pigs-trimmed-h264-1080p.mov"
     ctypes.CDLL(PLUGIN_LIBRARY)
 
-    # load coco labels
+    yolov7 = YoLov7TRT(engine_file_path)
+    sort_tracker = SortTracker(max_age=3, min_hits=3, iou_threshold=0.3)
+    tracking = Tracking()
 
-    categories = [
-        "pig",
-        "person",
-    ]
+    max_queue_size = 3  # Maximum size of the frame queue
+    frame_queue = Queue(maxsize=max_queue_size)
 
-    if os.path.exists("output/"):
-        shutil.rmtree("output/")
-    os.makedirs("output/")
-    # a YoLov7TRT instance
-    yolov7_wrapper = YoLov7TRT(engine_file_path)
-    try:
-        print("batch size is", yolov7_wrapper.batch_size)
+    infer_thread = InferThread(frame_queue=frame_queue, max_queue_size=max_queue_size, yolov7=yolov7, video_path=video_path)
+    display_thread = DisplayThread(frame_queue=frame_queue, yolov7=yolov7, sort_tracker=sort_tracker, tracking=tracking)
+    infer_thread.start()
+    display_thread.start()
 
-        # create a new thread to do inference
-        thread1 = inferThread(yolov7_wrapper, video_path=video_path)
-        thread1.start()
-        thread1.join()
+    infer_thread.join()
+    frame_queue.join()
+    display_thread.join()
 
-    finally:
-        # destroy the instance
-        yolov7_wrapper.destroy()
+    cv2.destroyAllWindows()
