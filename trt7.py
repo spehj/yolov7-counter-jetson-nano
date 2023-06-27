@@ -99,7 +99,7 @@ class Tracking():
 
     def draw_counter(self, image, result_boxes, frame_counter):
         # Draw points and labels on the original image
-        print("Result boxes: ", result_boxes)
+        # print("Result boxes: ", result_boxes)
         for j in range(len(result_boxes)):
             box = result_boxes[j]
             c_x, c_y = self.calculate_center(bbox=box)
@@ -516,7 +516,7 @@ class DisplayThread(threading.Thread):
             print("Drawing {}...".format(frame_counter))
             img = self.tracking.draw_counter(image=img, result_boxes=result_boxes, frame_counter=frame_counter)
 
-            print("Displaying {}... pid: {}".format(frame_counter, os.getpid()))
+            print("Displaying {}...".format(frame_counter))
             cv2.imshow('Display', img)
             current_time, avg_time, avg_fps = self.timer.update(self.frame_counter)
             time_end = time.time()
