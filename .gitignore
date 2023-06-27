@@ -80,3 +80,5 @@ Dockerfile1
 Dockerfile2
 Dockerfile3
 *.pt
+*.MOV
+*.mov
